@@ -194,6 +194,40 @@ button{font-family:inherit}
 .brush .sw{width:11px;height:11px;border-radius:4px;flex-shrink:0}
 .brush.on{color:#fff;border-color:transparent}
 
+/* ============ TURNOS ============ */
+.turnobar{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px;align-items:center}
+.turnobar .tl{font-weight:800;font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:#8496a8;margin-right:2px}
+.tchip{display:inline-flex;align-items:center;gap:7px;border:2px solid var(--line);background:#fff;color:var(--navy);
+  font-family:"Cocomat";font-weight:800;font-size:.82rem;padding:8px 15px;border-radius:100px;cursor:pointer;transition:.2s var(--ease)}
+.tchip:hover{transform:translateY(-1px);box-shadow:var(--shadow-soft)}
+.tchip.on{background:var(--navy);color:#fff;border-color:transparent}
+.tchip small{font-weight:500;opacity:.7;font-size:.72rem}
+.tchip.on small{opacity:.85}
+
+/* pips de turno dentro do chip do calendário */
+.chip{flex-direction:column;gap:2px;padding:4px 9px}
+.chip .ini{line-height:1}
+.chip .pips{display:flex;gap:2px}
+.chip .pip{font-size:.56rem;font-weight:800;line-height:1;padding:1px 3px;border-radius:3px;background:rgba(255,255,255,.35);color:#fff}
+.chip.mine .pip{background:rgba(255,255,255,.55)}
+
+/* modal de turnos do dia */
+.turno-row{display:flex;align-items:center;gap:12px;padding:13px 14px;border:2px solid var(--line);border-radius:14px;margin-bottom:9px;transition:.18s}
+.turno-row .tinfo{flex:1}
+.turno-row .tnome{font-weight:800;color:var(--navy);font-size:.95rem}
+.turno-row .thora{font-size:.78rem;color:#8496a8}
+.turno-row.on{border-color:var(--teal);background:#F3FBF9}
+.turno-row .who{font-size:.75rem;color:#52667c;margin-top:3px}
+.tsw{width:48px;height:28px;border-radius:100px;background:#d7dde3;position:relative;flex-shrink:0;transition:background .2s;border:0;cursor:pointer}
+.tsw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:transform .2s;box-shadow:0 2px 5px rgba(0,0,0,.2)}
+.tsw.on{background:var(--teal)}.tsw.on::after{transform:translateX(20px)}
+.tsw:disabled{opacity:.5;cursor:not-allowed}
+.dayteam{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.dayteam .dt-t{font-weight:800;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:#8496a8;margin-bottom:8px}
+.dayteam .dt-row{font-size:.85rem;color:var(--navy);margin-bottom:5px}
+.dayteam .dt-row b{font-weight:800}
+.dayteam .dt-row .none{color:#a7b4c2;font-weight:500}
+
 /* ============ SINO / AÇÕES / PAINEL ============ */
 .bell{position:relative;width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:#fff;
   cursor:pointer;display:grid;place-items:center;color:var(--navy);transition:.25s var(--ease)}
@@ -312,6 +346,8 @@ button{font-family:inherit}
     <div class="legend" id="legend"></div>
   </div>
 
+  <div class="turnobar" id="turnobar"></div>
+
   <section class="cal">
     <div class="dow"><div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div></div>
     <div class="grid" id="grid"></div>
@@ -350,7 +386,8 @@ button{font-family:inherit}
 <script>
 /* ======================================================
    Agenda Chamego — Supabase (login + tempo real)
-   v2: ausências, trocas de dia e notificações
+   v3: turnos (Manhã / Tarde / Plantão), ausências,
+       trocas por turno e notificações
    ====================================================== */
 const CONFIG = {
   url:  "https://ifipqciprtzkoeuqeivz.supabase.co",
@@ -359,13 +396,19 @@ const CONFIG = {
 
 const PALETA = ["#E84E2A","#2D9C8B","#1D3C61","#D14747","#5FC3B4"];
 const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+const TURNOS = [
+  { id:"manha",   nome:"Manhã",   hora:"08:00 – 12:30", ab:"M" },
+  { id:"tarde",   nome:"Tarde",   hora:"14:00 – 18:30", ab:"T" },
+  { id:"plantao", nome:"Plantão", hora:"sob escala",    ab:"P" },
+];
+const turnoNome = id => (TURNOS.find(t=>t.id===id)||{}).nome || id;
+const turnoAb   = id => (TURNOS.find(t=>t.id===id)||{}).ab   || "?";
 
 let sb=null, session=null, profiles=[], myProfile=null;
 let view=new Date(); view.setDate(1);
-let marks={};                 // "YYYY-MM-DD" -> Set(vetId)
-let ausencias=[];             // {id, vet_id, inicio, fim, motivo}
-let solicitacoes=[];          // {id, de_vet, para_vet, dia_origem, dia_destino, mensagem, status, ...}
-let filter=null, subscribed=false, brush=null, panelTab="receb";
+let marks={};                 // dia -> { vetId: Set(turno) }
+let ausencias=[], solicitacoes=[];
+let filter=null, turnoFilter="todos", subscribed=false, brush=null, panelTab="receb";
 
 const $=s=>document.querySelector(s);
 const ymd=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -378,10 +421,14 @@ const isMaster=()=>!!(myProfile&&myProfile.papel==="gestor");
 function initials(n){const c=(n||"").replace(/^(Dra?\.?|Dr\.?)\s*/i,"").trim();const p=c.split(/\s+/).filter(Boolean);return p.length>=2?(p[0][0]+p[p.length-1][0]).toUpperCase():c.slice(0,2).toUpperCase();}
 const brDate=k=>{const[y,m,d]=k.split("-");return `${d}/${m}`;};
 const brFull=k=>{const[y,m,d]=k.split("-");return `${d}/${m}/${y}`;};
-function addMark(d,v){(marks[d]||=new Set()).add(v);}
-function delMark(d,v){if(marks[d]){marks[d].delete(v);if(!marks[d].size)delete marks[d];}}
-function hasMark(d,v){return marks[d]&&marks[d].has(v);}
-function countMonth(v){const y=view.getFullYear(),m=view.getMonth();let n=0;for(const k in marks){const[yy,mm]=k.split("-");if(+yy===y&&+mm===m+1&&marks[k].has(v.id))n++;}return n;}
+
+/* marks helpers (dia -> vetId -> Set(turno)) */
+function turnosDe(dia,vetId){ return (marks[dia]&&marks[dia][vetId]) || new Set(); }
+function hasTurno(dia,vetId,turno){ const s=marks[dia]&&marks[dia][vetId]; return !!(s&&s.has(turno)); }
+function presente(dia,vetId){ const s=marks[dia]&&marks[dia][vetId]; return !!(s&&s.size); }
+function addT(dia,vetId,turno){ (marks[dia]||(marks[dia]={})); (marks[dia][vetId]||(marks[dia][vetId]=new Set())).add(turno); }
+function delT(dia,vetId,turno){ if(marks[dia]&&marks[dia][vetId]){ marks[dia][vetId].delete(turno); if(!marks[dia][vetId].size) delete marks[dia][vetId]; if(!Object.keys(marks[dia]).length) delete marks[dia]; } }
+function countTurnos(v){const y=view.getFullYear(),m=view.getMonth();let n=0;for(const k in marks){const[yy,mm]=k.split("-");if(+yy===y&&+mm===m+1&&marks[k][v.id])n+=marks[k][v.id].size;}return n;}
 function ausenteEm(vetId,dia){return ausencias.some(a=>a.vet_id===vetId && dia>=a.inicio && dia<=a.fim);}
 function ausenciaDe(vetId,dia){return ausencias.find(a=>a.vet_id===vetId && dia>=a.inicio && dia<=a.fim);}
 function pendentesParaMim(){return solicitacoes.filter(s=>s.status==="pendente" && (s.para_vet===meId() || isMaster()));}
@@ -400,7 +447,7 @@ async function doLogin(){
 async function logout(){
   if(!confirm("Sair da agenda?")) return;
   await sb.auth.signOut();
-  session=null; myProfile=null; marks={}; profiles=[]; ausencias=[]; solicitacoes=[]; brush=null; filter=null;
+  session=null; myProfile=null; marks={}; profiles=[]; ausencias=[]; solicitacoes=[]; brush=null; filter=null; turnoFilter="todos";
   $("#bell").hidden=true; $("#modeBadge").className="mode demo"; $("#modeText").textContent="Desconectado";
   paintUser(); render(); showLogin();
 }
@@ -413,9 +460,9 @@ async function loadProfiles(){
   let i=0; profiles=(data||[]).map(p=>({...p,cor:p.cor||PALETA[i++%PALETA.length]}));
 }
 async function loadMarks(){
-  const {data,error}=await sb.from("disponibilidade").select("vet_id,dia");
+  const {data,error}=await sb.from("disponibilidade").select("vet_id,dia,turno");
   if(error){console.error(error);return;}
-  marks={}; (data||[]).forEach(r=>addMark(r.dia,r.vet_id));
+  marks={}; (data||[]).forEach(r=>addT(r.dia,r.vet_id,r.turno||"manha"));
 }
 async function loadAusencias(){
   const {data,error}=await sb.from("ausencias").select("id,vet_id,inicio,fim,motivo").order("inicio");
@@ -428,31 +475,31 @@ async function loadSolic(){
 function subscribe(){
   if(subscribed) return; subscribed=true;
   sb.channel("agenda-rt")
-    .on("postgres_changes",{event:"*",schema:"public",table:"disponibilidade"}, async()=>{ await loadMarks(); render(); })
+    .on("postgres_changes",{event:"*",schema:"public",table:"disponibilidade"}, async()=>{ await loadMarks(); render(); if(dayModalKey) refreshDayModal(); })
     .on("postgres_changes",{event:"*",schema:"public",table:"ausencias"},       async()=>{ await loadAusencias(); render(); if($("#panel").classList.contains("show")) refreshPanel(); })
     .on("postgres_changes",{event:"*",schema:"public",table:"solicitacoes"},     async()=>{ await loadSolic(); paintBell(); if($("#panel").classList.contains("show")) refreshPanel(); })
     .subscribe();
 }
 
-/* ---------- MARCAR DISPONIBILIDADE ---------- */
+/* ---------- MARCAR TURNO ---------- */
 function editTarget(){
   if(!myProfile) return null;
   if(myProfile.papel==="vet") return meId();
   if(myProfile.papel==="gestor") return brush;
   return null;
 }
-async function toggle(dia){
+async function toggleTurno(dia,turno){
   const target=editTarget();
   if(!target)return;
   if(ausenteEm(target,dia)){ toast(`${nomeDe(target)} está de ausência nesse dia.`); return; }
-  const adding=!hasMark(dia,target);
-  if(adding)addMark(dia,target);else delMark(dia,target);
-  render();
+  const adding=!hasTurno(dia,target,turno);
+  if(adding)addT(dia,target,turno);else delT(dia,target,turno);
+  render(); if(dayModalKey===dia) refreshDayModal();
   try{
-    if(adding){const{error}=await sb.from("disponibilidade").insert({vet_id:target,dia});if(error)throw error;}
-    else{const{error}=await sb.from("disponibilidade").delete().eq("vet_id",target).eq("dia",dia);if(error)throw error;}
+    if(adding){const{error}=await sb.from("disponibilidade").insert({vet_id:target,dia,turno});if(error)throw error;}
+    else{const{error}=await sb.from("disponibilidade").delete().eq("vet_id",target).eq("dia",dia).eq("turno",turno);if(error)throw error;}
   }catch(e){
-    if(adding)delMark(dia,target);else addMark(dia,target); render();
+    if(adding)delT(dia,target,turno);else addT(dia,target,turno); render(); if(dayModalKey===dia) refreshDayModal();
     toast(/AUSENTE/.test(e.message||"")?"Dia bloqueado por ausência.":"Não deu pra salvar.");
   }
 }
@@ -463,7 +510,18 @@ async function afterLogin(){
   myProfile = prof(meId()) || null;
   if(!myProfile){ $("#modeText").textContent="Sem perfil"; }
   await Promise.all([loadMarks(), loadAusencias(), loadSolic()]);
-  subscribe(); paintUser(); paintBell(); render();
+  subscribe(); paintUser(); paintBell(); renderTurnobar(); render();
+}
+
+/* ---------- BARRA DE TURNOS ---------- */
+function renderTurnobar(){
+  const bar=$("#turnobar");
+  if(!session||!myProfile){ bar.innerHTML=""; return; }
+  let h=`<span class="tl">Ver turno</span>`;
+  h+=`<button class="tchip ${turnoFilter==="todos"?"on":""}" data-t="todos">Todos</button>`;
+  TURNOS.forEach(t=>{ h+=`<button class="tchip ${turnoFilter===t.id?"on":""}" data-t="${t.id}">${t.nome}${t.hora?` <small>${t.hora}</small>`:""}</button>`; });
+  bar.innerHTML=h;
+  bar.querySelectorAll(".tchip").forEach(b=>b.onclick=()=>{ turnoFilter=b.dataset.t; renderTurnobar(); render(); });
 }
 
 /* ---------- RENDER CALENDÁRIO ---------- */
@@ -472,32 +530,42 @@ function render(){
   $("#monthLabel").textContent=`${MESES[m]} ${y}`;
   const grid=$("#grid"); grid.innerHTML="";
   const start=new Date(y,m,1).getDay(), days=new Date(y,m+1,0).getDate();
-  const me=meId(), master=isMaster(), target=editTarget();
+  const me=meId(), master=isMaster(), canEditAny=!!editTarget();
   for(let i=0;i<start;i++){const b=document.createElement("div");b.className="cell blank";grid.appendChild(b);}
   for(let d=1;d<=days;d++){
     const date=new Date(y,m,d), key=ymd(date), wknd=[0,6].includes(date.getDay());
-    const targetAbsent = target ? ausenteEm(target,key) : false;
-    const canEdit = !!target && !targetAbsent;
     const cell=document.createElement("div");
-    cell.className="cell"+(wknd?" wknd":"")+(key===todayKey?" today":"")+(canEdit?" editable":"")+(target&&targetAbsent?" blocked":"");
-    if(canEdit){cell.tabIndex=0;cell.setAttribute("role","button");}
+    cell.className="cell"+(wknd?" wknd":"")+(key===todayKey?" today":"")+(canEditAny?" editable":"");
+    cell.tabIndex=0; cell.setAttribute("role","button");
     let chips="",names=[];
     vets().forEach(v=>{
       if(filter&&filter!==v.id)return;
       if(ausenteEm(v.id,key)){
+        if(turnoFilter!=="todos")return;
         const a=ausenciaDe(v.id,key);
         names.push(`${v.nome} (ausente${a&&a.motivo?" · "+a.motivo:""})`);
         chips+=`<span class="chip aus" title="${v.nome} — ausente${a&&a.motivo?" ("+a.motivo+")":""}"><span class="ico">✈</span>${initials(v.nome)}</span>`;
         return;
       }
-      if(!hasMark(key,v.id))return;
-      names.push(v.nome);
-      const mine = v.id===me || (master && v.id===brush);
-      chips+=`<span class="chip${mine?" mine":""}" style="--c:${v.cor}" title="${v.nome}">${initials(v.nome)}${mine?'<span class="x">×</span>':''}</span>`;
+      const ts=turnosDe(key,v.id);
+      if(turnoFilter!=="todos"){
+        if(!ts.has(turnoFilter))return;
+        names.push(`${v.nome} · ${turnoNome(turnoFilter)}`);
+        const mine=v.id===me||(master&&v.id===brush);
+        chips+=`<span class="chip${mine?" mine":""}" style="--c:${v.cor}" title="${v.nome} · ${turnoNome(turnoFilter)}"><span class="ini">${initials(v.nome)}</span></span>`;
+      } else {
+        if(!ts.size)return;
+        const ord=TURNOS.filter(t=>ts.has(t.id));
+        names.push(`${v.nome} · ${ord.map(t=>t.nome).join(", ")}`);
+        const mine=v.id===me||(master&&v.id===brush);
+        const pips=ord.map(t=>`<span class="pip">${t.ab}</span>`).join("");
+        chips+=`<span class="chip${mine?" mine":""}" style="--c:${v.cor}" title="${v.nome} · ${ord.map(t=>t.nome).join(", ")}"><span class="ini">${initials(v.nome)}</span><span class="pips">${pips}</span></span>`;
+      }
     });
-    cell.innerHTML=`<div class="dnum">${d}</div>${canEdit?'<span class="add">+</span>':''}<div class="chips">${chips}</div>`;
+    cell.innerHTML=`<div class="dnum">${d}</div><div class="chips">${chips}</div>`;
     if(names.length)cell.title=names.join(" · ");
-    if(canEdit){cell.addEventListener("click",()=>toggle(key));cell.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();toggle(key);}});}
+    cell.addEventListener("click",()=>openDayModal(key));
+    cell.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openDayModal(key);}});
     grid.appendChild(cell);
   }
   renderLegend(); renderSummary();
@@ -507,16 +575,57 @@ function renderLegend(){
   vets().forEach(v=>{
     const el=document.createElement("div");
     el.className="leg"+(filter&&filter!==v.id?" dim":"")+(filter===v.id?" active":"");
-    el.innerHTML=`<span class="sw" style="background:${v.cor}"></span><span class="ln">${v.nome}</span><span class="ct">${countMonth(v)}d</span>`;
+    el.innerHTML=`<span class="sw" style="background:${v.cor}"></span><span class="ln">${v.nome}</span><span class="ct">${countTurnos(v)}</span>`;
     el.onclick=()=>{ filter = filter===v.id ? null : v.id; render(); };
     box.appendChild(el);
   });
 }
 function renderSummary(){
   const m=view.getMonth();
-  let h=`<span class="lbl">${MESES[m]}</span>`;
-  vets().forEach(v=>{ h+=`<div class="item"><span class="sw" style="background:${v.cor}"></span><span class="nm">${v.nome}</span><span class="big">${countMonth(v)}</span><span class="un">dias</span></div>`; });
+  let h=`<span class="lbl">${MESES[m]} · turnos</span>`;
+  vets().forEach(v=>{ h+=`<div class="item"><span class="sw" style="background:${v.cor}"></span><span class="nm">${v.nome}</span><span class="big">${countTurnos(v)}</span><span class="un">turnos</span></div>`; });
   $("#summary").innerHTML=h;
+}
+
+/* ---------- MODAL DO DIA (turnos) ---------- */
+let dayModalKey=null;
+function openDayModal(key){ dayModalKey=key; drawDayModal(); $("#panel").classList.add("show"); }
+function refreshDayModal(){ if(dayModalKey) drawDayModal(); }
+function drawDayModal(){
+  const key=dayModalKey, target=editTarget(), master=isMaster();
+  const alvo = target ? prof(target) : null;
+  const targetAbsent = target ? ausenteEm(target,key) : false;
+
+  let editHtml="";
+  if(target && !targetAbsent){
+    const a = master ? ` — <b style="color:${alvo.cor}">${alvo.nome}</b>` : "";
+    editHtml += `<div class="sub">Marque os turnos${master?" de":" que você vai atender"}${a}:</div>`;
+    TURNOS.forEach(t=>{
+      const on=hasTurno(key,target,t.id);
+      editHtml += `<div class="turno-row ${on?"on":""}">
+        <div class="tinfo"><div class="tnome">${t.nome}</div><div class="thora">${t.hora}</div></div>
+        <button class="tsw ${on?"on":""}" data-t="${t.id}" aria-label="${t.nome}"></button></div>`;
+    });
+  } else if(target && targetAbsent){
+    const a=ausenciaDe(target,key);
+    editHtml += `<div class="sub" style="color:var(--red)"><b>${alvo.nome}</b> está de ausência nesse dia${a&&a.motivo?` (${a.motivo})`:""} — agenda bloqueada.</div>`;
+  } else {
+    editHtml += `<div class="sub">Visão do dia.</div>`;
+  }
+
+  // equipe do dia por turno
+  let team=`<div class="dayteam"><div class="dt-t">Equipe do dia</div>`;
+  TURNOS.forEach(t=>{
+    const quem=vets().filter(v=>hasTurno(key,v.id,t.id) && !ausenteEm(v.id,key)).map(v=>v.nome);
+    team+=`<div class="dt-row"><b>${t.nome}:</b> ${quem.length?quem.join(", "):`<span class="none">ninguém</span>`}</div>`;
+  });
+  const ausentes=vets().filter(v=>ausenteEm(v.id,key)).map(v=>v.nome);
+  if(ausentes.length) team+=`<div class="dt-row"><b>Ausentes:</b> ${ausentes.join(", ")}</div>`;
+  team+=`</div>`;
+
+  $("#panelBody").innerHTML=`<h2>${brFull(key)}</h2>${editHtml}${team}`;
+  $("#panelBody").dataset.kind="day";
+  $("#panelBody").querySelectorAll(".tsw").forEach(b=>b.onclick=()=>toggleTurno(key,b.dataset.t));
 }
 
 /* ---------- CABEÇALHO / AÇÕES ---------- */
@@ -545,10 +654,10 @@ function renderHint(){
   hint.classList.add("show");
   if(myProfile.papel==="vet"){
     const nome=myProfile.nome.replace(/^(Dra?\.?|Dr\.?)\s*/i,"");
-    hint.innerHTML=`<span class="inst"><b>${nome}</b> · toque num dia para marcar ou tirar a sua disponibilidade.</span>`;
+    hint.innerHTML=`<span class="inst"><b>${nome}</b> · toque num dia para escolher seus turnos (manhã, tarde, plantão).</span>`;
     return;
   }
-  let h=`<span class="lbl">Editar disponibilidade de:</span>`;
+  let h=`<span class="lbl">Editar turnos de:</span>`;
   vets().forEach(v=>{
     const on=brush===v.id;
     h+=`<button class="brush${on?' on':''}" data-id="${v.id}" style="${on?`background:${v.cor}`:''}"><span class="sw" style="background:${on?'#fff':v.cor}"></span>${v.nome}</button>`;
@@ -560,10 +669,10 @@ function renderHint(){
 function renderActions(){
   const bar=$("#actionbar");
   if(!session||!myProfile){ bar.innerHTML=""; return; }
-  const troca = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3L4 7l4 4"/><path d="M4 7h16"/><path d="M16 21l4-4-4-4"/><path d="M20 17H4"/></svg>`;
-  const aus = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>`;
+  const troca=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3L4 7l4 4"/><path d="M4 7h16"/><path d="M16 21l4-4-4-4"/><path d="M20 17H4"/></svg>`;
+  const aus=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>`;
   let h="";
-  if(myProfile.papel==="vet") h+=`<button class="abtn primary" id="btnTroca">${troca} Pedir troca de dia</button>`;
+  if(myProfile.papel==="vet") h+=`<button class="abtn primary" id="btnTroca">${troca} Pedir troca</button>`;
   h+=`<button class="abtn" id="btnAus">${aus} ${isMaster()?"Gerenciar ausências":"Marcar ausência"}</button>`;
   bar.innerHTML=h;
   const t=$("#btnTroca"); if(t) t.onclick=abrirTroca;
@@ -571,34 +680,35 @@ function renderActions(){
 }
 
 /* ---------- PAINEL ---------- */
-function openPanel(html){ $("#panelBody").innerHTML=html; $("#panel").classList.add("show"); }
-function closePanel(){ $("#panel").classList.remove("show"); }
-function refreshPanel(){ // reabre a aba atual
-  if($("#panelBody").dataset.kind==="solic") abrirSolic();
-  else if($("#panelBody").dataset.kind==="aus") abrirAusencia();
+function closePanel(){ $("#panel").classList.remove("show"); dayModalKey=null; }
+function openPanel(html){ dayModalKey=null; $("#panelBody").innerHTML=html; $("#panel").classList.add("show"); }
+function refreshPanel(){
+  const k=$("#panelBody").dataset.kind;
+  if(k==="solic") abrirSolic(); else if(k==="aus") abrirAusencia(); else if(k==="day") drawDayModal();
 }
 
 /* ----- solicitações (sino) ----- */
+function slotTxt(dia,turno){ return `<b>${turnoNome(turno)}</b> de <b>${brDate(dia)}</b>`; }
 function abrirSolic(){
   const me=meId();
   const receb = solicitacoes.filter(s=>s.para_vet===me || (isMaster()&&s.status==="pendente"));
   const env = solicitacoes.filter(s=>s.de_vet===me);
   const cardReceb = s=>{
-    const troca = s.dia_destino ? ` e quer o seu dia <b>${brDate(s.dia_destino)}</b> em troca` : "";
+    const troca = s.dia_destino ? ` e quer ${slotTxt(s.dia_destino,s.turno_destino)} em troca` : "";
     return `<div class="req">
-      <div class="txt"><b>${nomeDe(s.de_vet)}</b> quer passar o dia <b>${brDate(s.dia_origem)}</b> para <b>${nomeDe(s.para_vet)}</b>${troca}.</div>
+      <div class="txt"><b>${nomeDe(s.de_vet)}</b> quer passar ${slotTxt(s.dia_origem,s.turno_origem)} para <b>${nomeDe(s.para_vet)}</b>${troca}.</div>
       <div class="meta">Enviado em ${brFull(s.criado_em.slice(0,10))}</div>
       ${s.mensagem?`<div class="msg">"${s.mensagem}"</div>`:""}
       ${s.status==="pendente" ? `<div class="acts"><button class="ok" data-ok="${s.id}">Aceitar</button><button class="no" data-no="${s.id}">Recusar</button></div>` : `<div style="margin-top:8px"><span class="tag ${s.status}">${s.status}</span></div>`}
     </div>`;
   };
   const cardEnv = s=>{
-    const troca = s.dia_destino ? ` ↔ ${brDate(s.dia_destino)}` : "";
+    const troca = s.dia_destino ? ` ↔ ${turnoAb(s.turno_destino)} ${brDate(s.dia_destino)}` : "";
     return `<div class="req">
-      <div class="txt">Você pediu para <b>${nomeDe(s.para_vet)}</b> · dia <b>${brDate(s.dia_origem)}</b>${troca}</div>
+      <div class="txt">Você pediu para <b>${nomeDe(s.para_vet)}</b> · ${turnoNome(s.turno_origem)} ${brDate(s.dia_origem)}${troca}</div>
       <div class="meta">${brFull(s.criado_em.slice(0,10))}</div>
       <div style="margin-top:8px;display:flex;align-items:center;gap:8px"><span class="tag ${s.status}">${s.status}</span>
-      ${s.status==="pendente"?`<button class="no" style="border:2px solid var(--line);background:#fff;border-radius:100px;padding:5px 12px;font-weight:800;font-size:.78rem;cursor:pointer" data-cancel="${s.id}">Cancelar</button>`:""}</div>
+      ${s.status==="pendente"?`<button style="border:2px solid var(--line);background:#fff;border-radius:100px;padding:5px 12px;font-weight:800;font-size:.78rem;cursor:pointer" data-cancel="${s.id}">Cancelar</button>`:""}</div>
     </div>`;
   };
   const body = panelTab==="receb"
@@ -606,7 +716,7 @@ function abrirSolic(){
     : (env.length?env.map(cardEnv).join(""):`<div class="empty">Você não enviou solicitações.</div>`);
   openPanel(`
     <h2>Solicitações</h2>
-    <div class="sub">Trocas de dia entre a equipe.</div>
+    <div class="sub">Trocas de turno entre a equipe.</div>
     <div class="tabs">
       <div class="tab ${panelTab==="receb"?"on":""}" data-tab="receb">Recebidas${pendentesParaMim().length?` (${pendentesParaMim().length})`:""}</div>
       <div class="tab ${panelTab==="env"?"on":""}" data-tab="env">Enviadas</div>
@@ -630,31 +740,45 @@ async function cancelar(id){
   await loadSolic(); paintBell(); abrirSolic();
 }
 
-/* ----- pedir troca ----- */
+/* ----- pedir troca (por turno) ----- */
+function slotsDe(vetId){
+  const out=[];
+  Object.keys(marks).sort().forEach(dia=>{ const s=marks[dia][vetId]; if(s) TURNOS.forEach(t=>{ if(s.has(t.id)) out.push({dia,turno:t.id}); }); });
+  return out;
+}
 function abrirTroca(){
   const me=meId();
-  const meusDias=[...new Set(Object.keys(marks).filter(k=>marks[k].has(me)))].sort();
+  const meus=slotsDe(me);
   const colegas=vets().filter(v=>v.id!==me);
   const optColegas=colegas.map(v=>`<option value="${v.id}">${v.nome}</option>`).join("");
-  const optMeus=meusDias.length?meusDias.map(k=>`<option value="${k}">${brFull(k)}</option>`).join(""):`<option value="">(você não tem dias marcados)</option>`;
+  const optMeus=meus.length?meus.map(s=>`<option value="${s.dia}|${s.turno}">${turnoNome(s.turno)} · ${brFull(s.dia)}</option>`).join(""):`<option value="">(você não tem turnos marcados)</option>`;
   openPanel(`
-    <h2>Pedir troca de dia</h2>
+    <h2>Pedir troca de turno</h2>
     <div class="sub">A colega recebe a solicitação e decide aceitar ou não.</div>
     <div class="perr" id="trErr"></div>
     <div class="fld"><label>Passar para qual colega?</label><select id="trColega">${optColegas}</select></div>
-    <div class="fld"><label>Qual dia seu você quer passar?</label><select id="trOrigem">${optMeus}</select></div>
-    <div class="fld"><label>Quer um dia em troca? (opcional)</label><input id="trDestino" type="date"></div>
-    <div class="fld"><label>Mensagem (opcional)</label><textarea id="trMsg" placeholder="Ex.: consulta médica nesse dia, pode ser?"></textarea></div>
+    <div class="fld"><label>Qual turno seu você quer passar?</label><select id="trOrigem">${optMeus}</select></div>
+    <div class="fld"><label>Quer um turno em troca? (opcional)</label><select id="trDestino"><option value="">— nenhum —</option></select></div>
+    <div class="fld"><label>Mensagem (opcional)</label><textarea id="trMsg" placeholder="Ex.: consulta médica nessa manhã, pode ser?"></textarea></div>
     <button class="psave" id="trSave">Enviar solicitação</button>`);
   $("#panelBody").dataset.kind="troca";
+  const fillDestino=()=>{
+    const col=$("#trColega").value;
+    const slots=slotsDe(col);
+    $("#trDestino").innerHTML=`<option value="">— nenhum —</option>`+slots.map(s=>`<option value="${s.dia}|${s.turno}">${turnoNome(s.turno)} · ${brFull(s.dia)}</option>`).join("");
+  };
+  $("#trColega").onchange=fillDestino; fillDestino();
   $("#trSave").onclick=enviarTroca;
 }
 async function enviarTroca(){
   const err=$("#trErr"); err.textContent="";
-  const para=$("#trColega").value, origem=$("#trOrigem").value, destino=$("#trDestino").value||null, msg=$("#trMsg").value.trim()||null;
+  const para=$("#trColega").value, origem=$("#trOrigem").value, destino=$("#trDestino").value, msg=$("#trMsg").value.trim()||null;
   if(!para){err.textContent="Escolha a colega.";return;}
-  if(!origem){err.textContent="Você precisa ter um dia marcado para passar.";return;}
-  const {error}=await sb.from("solicitacoes").insert({de_vet:meId(),para_vet:para,dia_origem:origem,dia_destino:destino,mensagem:msg});
+  if(!origem){err.textContent="Você precisa ter um turno marcado para passar.";return;}
+  const [dOri,tOri]=origem.split("|");
+  const rec={de_vet:meId(),para_vet:para,dia_origem:dOri,turno_origem:tOri,mensagem:msg};
+  if(destino){ const[dDes,tDes]=destino.split("|"); rec.dia_destino=dDes; rec.turno_destino=tDes; }
+  const {error}=await sb.from("solicitacoes").insert(rec);
   if(error){ err.textContent="Erro ao enviar."; return; }
   closePanel(); toast("Solicitação enviada!");
   await loadSolic(); paintBell();
@@ -675,7 +799,7 @@ function abrirAusencia(){
   }).join("") : `<div class="empty">Nenhuma ausência cadastrada.</div>`;
   openPanel(`
     <h2>${master?"Gerenciar ausências":"Marcar ausência"}</h2>
-    <div class="sub">No período de ausência a agenda fica bloqueada — ninguém marca disponibilidade e todos veem.</div>
+    <div class="sub">No período de ausência a agenda fica bloqueada — ninguém marca turnos e todos veem.</div>
     <div class="perr" id="auErr"></div>
     ${alvoSel}
     <div class="fld"><div class="row">
@@ -731,7 +855,7 @@ function wire(){
 async function boot(){
   if(!window.supabase){ $("#loginErr").textContent="Não carregou a biblioteca do Supabase (sem internet?)."; return; }
   sb=window.supabase.createClient(CONFIG.url,CONFIG.anon);
-  wire(); paintUser(); render();
+  wire(); paintUser(); renderTurnobar(); render();
   const {data:{session:s}}=await sb.auth.getSession();
   if(s){ session=s; $("#overlay").classList.remove("show"); await afterLogin(); }
   else { showLogin(); }
