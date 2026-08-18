@@ -222,6 +222,10 @@ button{font-family:inherit}
 .tsw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;transition:transform .2s;box-shadow:0 2px 5px rgba(0,0,0,.2)}
 .tsw.on{background:var(--teal)}.tsw.on::after{transform:translateX(20px)}
 .tsw:disabled{opacity:.5;cursor:not-allowed}
+.diainteiro{width:100%;padding:12px;border:2px dashed var(--line);background:#fff;border-radius:14px;margin-bottom:12px;
+  font-family:"Cocomat";font-weight:800;font-size:.88rem;color:var(--navy);cursor:pointer;transition:.2s var(--ease)}
+.diainteiro:hover{border-color:var(--teal);transform:translateY(-1px)}
+.diainteiro.on{background:var(--teal);color:#fff;border-color:transparent;border-style:solid}
 .dayteam{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 .dayteam .dt-t{font-weight:800;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:#8496a8;margin-bottom:8px}
 .dayteam .dt-row{font-size:.85rem;color:var(--navy);margin-bottom:5px}
@@ -503,6 +507,30 @@ async function toggleTurno(dia,turno){
     toast(/AUSENTE/.test(e.message||"")?"Dia bloqueado por ausência.":"Não deu pra salvar.");
   }
 }
+async function toggleDiaInteiro(dia){
+  const target=editTarget();
+  if(!target)return;
+  if(ausenteEm(target,dia)){ toast(`${nomeDe(target)} está de ausência nesse dia.`); return; }
+  const alvo=["manha","tarde"];
+  const antes=alvo.map(t=>hasTurno(dia,target,t));
+  const both=antes.every(Boolean);         // já tem os dois? -> remove os dois
+  alvo.forEach(t=>{ both ? delT(dia,target,t) : addT(dia,target,t); });
+  render(); if(dayModalKey===dia) refreshDayModal();
+  try{
+    if(both){
+      const {error}=await sb.from("disponibilidade").delete().eq("vet_id",target).eq("dia",dia).in("turno",alvo);
+      if(error)throw error;
+    }else{
+      const rows=alvo.map(t=>({vet_id:target,dia,turno:t}));
+      const {error}=await sb.from("disponibilidade").upsert(rows,{onConflict:"vet_id,dia,turno",ignoreDuplicates:true});
+      if(error)throw error;
+    }
+  }catch(e){
+    alvo.forEach((t,i)=>{ antes[i] ? addT(dia,target,t) : delT(dia,target,t); });
+    render(); if(dayModalKey===dia) refreshDayModal();
+    toast(/AUSENTE/.test(e.message||"")?"Dia bloqueado por ausência.":"Não deu pra salvar.");
+  }
+}
 
 async function afterLogin(){
   $("#modeBadge").className="mode live"; $("#modeText").textContent="Ao vivo";
@@ -600,6 +628,8 @@ function drawDayModal(){
   if(target && !targetAbsent){
     const a = master ? ` — <b style="color:${alvo.cor}">${alvo.nome}</b>` : "";
     editHtml += `<div class="sub">Marque os turnos${master?" de":" que você vai atender"}${a}:</div>`;
+    const diaCheio = hasTurno(key,target,"manha") && hasTurno(key,target,"tarde");
+    editHtml += `<button class="diainteiro ${diaCheio?"on":""}" id="btnDiaInteiro">${diaCheio?"✓ Dia inteiro (Manhã + Tarde) — tocar para tirar":"Marcar dia inteiro · Manhã + Tarde (08:00–18:30)"}</button>`;
     TURNOS.forEach(t=>{
       const on=hasTurno(key,target,t.id);
       editHtml += `<div class="turno-row ${on?"on":""}">
@@ -626,6 +656,7 @@ function drawDayModal(){
   $("#panelBody").innerHTML=`<h2>${brFull(key)}</h2>${editHtml}${team}`;
   $("#panelBody").dataset.kind="day";
   $("#panelBody").querySelectorAll(".tsw").forEach(b=>b.onclick=()=>toggleTurno(key,b.dataset.t));
+  const bDia=$("#btnDiaInteiro"); if(bDia) bDia.onclick=()=>toggleDiaInteiro(key);
 }
 
 /* ---------- CABEÇALHO / AÇÕES ---------- */
