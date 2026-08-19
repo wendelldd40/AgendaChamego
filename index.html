@@ -227,6 +227,24 @@ button{font-family:inherit}
   font-family:"Cocomat";font-weight:800;font-size:.88rem;color:var(--navy);cursor:pointer;transition:.2s var(--ease)}
 .diainteiro:hover{border-color:var(--teal);transform:translateY(-1px)}
 .diainteiro.on{background:var(--teal);color:#fff;border-color:transparent;border-style:solid}
+.chip.atend{background:#fff!important;color:var(--c)!important;border:2px solid var(--c);opacity:1;flex-direction:row;gap:3px;padding:3px 9px}
+.chip.atend .star{font-size:.7rem}
+.atend-box{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.atend-box .ab-t{font-weight:800;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;color:#8496a8;margin-bottom:9px}
+.atend-box .ab-h{font-weight:500;letter-spacing:0;text-transform:none;color:#a7b4c2}
+.atend-item{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:9px 12px;margin-bottom:7px}
+.atend-item .sw{width:11px;height:11px;border-radius:4px;flex-shrink:0}
+.atend-item .info{flex:1;font-size:.86rem;color:var(--navy)}
+.atend-item .info small{color:#8496a8}
+.atend-box .ab-empty{color:#a7b4c2;font-size:.85rem;margin-bottom:8px}
+.atend-add{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px}
+.atend-add select,.atend-add input{padding:10px 12px;border-radius:11px;border:2px solid var(--line);background:#fff;font-family:"Cocomat";font-size:.86rem;color:var(--navy)}
+.atend-add select{flex:0 0 auto}
+.atend-add #atDesc{flex:1;min-width:140px}
+.atend-add .hora{width:96px}
+.atend-add input:focus,.atend-add select:focus{outline:none;border-color:var(--teal)}
+.atend-btn{background:var(--navy);color:#fff;border:0;border-radius:100px;padding:0 16px;font-family:"Cocomat";font-weight:800;font-size:.83rem;cursor:pointer;transition:.2s}
+.atend-btn:hover{filter:brightness(1.12)}
 .assign-turno{margin-bottom:16px}
 .assign-turno .ah{font-weight:800;color:var(--navy);font-size:.95rem}
 .assign-turno .ahh{font-size:.75rem;color:#8496a8;margin:1px 0 8px}
@@ -425,7 +443,7 @@ const turnoAb   = id => (TURNOS.find(t=>t.id===id)||{}).ab   || "?";
 let sb=null, session=null, profiles=[], myProfile=null, vetsAll=[], myVet=null;
 let view=new Date(); view.setDate(1);
 let marks={};                 // dia -> { vetId: Set(turno) }
-let ausencias=[], solicitacoes=[];
+let ausencias=[], solicitacoes=[], atendimentos=[];
 let filter=null, turnoFilter="todos", subscribed=false, panelTab="receb";
 
 const $=s=>document.querySelector(s);
@@ -464,7 +482,7 @@ async function doLogin(){
 async function logout(){
   if(!confirm("Sair da agenda?")) return;
   await sb.auth.signOut();
-  session=null; myProfile=null; myVet=null; marks={}; profiles=[]; vetsAll=[]; ausencias=[]; solicitacoes=[]; filter=null; turnoFilter="todos";
+  session=null; myProfile=null; myVet=null; marks={}; profiles=[]; vetsAll=[]; ausencias=[]; solicitacoes=[]; atendimentos=[]; filter=null; turnoFilter="todos";
   $("#bell").hidden=true; $("#modeBadge").className="mode demo"; $("#modeText").textContent="Desconectado";
   paintUser(); renderTurnobar(); render(); showLogin();
 }
@@ -493,6 +511,12 @@ async function loadSolic(){
   const {data,error}=await sb.from("solicitacoes").select("*").order("criado_em",{ascending:false});
   if(!error) solicitacoes=data||[];
 }
+async function loadAtend(){
+  const {data,error}=await sb.from("atendimentos").select("id,vet_id,dia,descricao,hora").order("dia");
+  if(!error) atendimentos=data||[];
+}
+function atendDoDia(dia){ return atendimentos.filter(a=>a.dia===dia); }
+function countAtend(v){const y=view.getFullYear(),m=view.getMonth();return atendimentos.filter(a=>{const[yy,mm]=a.dia.split("-");return a.vet_id===v.id&&+yy===y&&+mm===m+1;}).length;}
 function subscribe(){
   if(subscribed) return; subscribed=true;
   sb.channel("agenda-rt")
@@ -500,6 +524,7 @@ function subscribe(){
     .on("postgres_changes",{event:"*",schema:"public",table:"veterinarios"},     async()=>{ await loadVets(); render(); if($("#panel").classList.contains("show")) refreshPanel(); })
     .on("postgres_changes",{event:"*",schema:"public",table:"ausencias"},         async()=>{ await loadAusencias(); render(); if($("#panel").classList.contains("show")) refreshPanel(); })
     .on("postgres_changes",{event:"*",schema:"public",table:"solicitacoes"},       async()=>{ await loadSolic(); paintBell(); if($("#panel").classList.contains("show")) refreshPanel(); })
+    .on("postgres_changes",{event:"*",schema:"public",table:"atendimentos"},       async()=>{ await loadAtend(); render(); if(dayModalKey) refreshDayModal(); })
     .subscribe();
 }
 
@@ -535,7 +560,7 @@ async function afterLogin(){
   myProfile = profiles.find(p=>p.id===meId()) || null;
   myVet = vetsAll.find(v=>v.user_id===meId()) || null;
   if(!myProfile){ $("#modeText").textContent="Sem perfil"; }
-  await Promise.all([loadMarks(), loadAusencias(), loadSolic()]);
+  await Promise.all([loadMarks(), loadAusencias(), loadSolic(), loadAtend()]);
   subscribe(); paintUser(); paintBell(); renderTurnobar(); render();
 }
 
@@ -587,6 +612,14 @@ function render(){
         chips+=`<span class="chip${mine?" mine":""}" style="--c:${v.cor}" title="${v.nome} · ${ord.map(t=>t.nome).join(", ")}"><span class="ini">${initials(v.nome)}</span><span class="pips">${pips}</span></span>`;
       }
     });
+    if(turnoFilter==="todos"){
+      atendDoDia(key).forEach(a=>{
+        const v=vet(a.vet_id); if(!v||!v.ativo)return;
+        if(filter&&filter!==a.vet_id)return;
+        names.push(`${v.nome} · atend.: ${a.descricao}${a.hora?" ("+a.hora+")":""}`);
+        chips+=`<span class="chip atend" style="--c:${v.cor}" title="${v.nome} · ${a.descricao}${a.hora?" ("+a.hora+")":""}"><span class="star">★</span>${initials(v.nome)}</span>`;
+      });
+    }
     cell.innerHTML=`<div class="dnum">${d}</div><div class="chips">${chips}</div>`;
     if(names.length)cell.title=names.join(" · ");
     if(canOpen){ cell.addEventListener("click",()=>openDayModal(key)); cell.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();openDayModal(key);}}); }
@@ -654,11 +687,44 @@ function drawDayModal(){
   const ausentes=vets().filter(v=>ausenteEm(v.id,key)).map(v=>v.nome);
   if(ausentes.length) team+=`<div class="dt-row"><b>Ausentes:</b> ${ausentes.join(", ")}</div>`;
   team+=`</div>`;
-  $("#panelBody").innerHTML=`<h2>${brFull(key)}</h2>${edit}${team}`;
+
+  // atendimentos específicos (não contam como turno)
+  const podeEditarAtend = isMaster() || (isVetLogin() && !ausenteEm(myVet.id,key));
+  let atend=`<div class="atend-box"><div class="ab-t">Atendimentos específicos <span class="ab-h">(não contam como turno)</span></div>`;
+  const lst=atendDoDia(key);
+  atend += lst.length ? lst.map(a=>{
+    const v=vet(a.vet_id)||{};
+    const podeApagar = isMaster() || (myVet && a.vet_id===myVet.id);
+    return `<div class="atend-item"><span class="sw" style="background:${v.cor||'#888'}"></span><div class="info"><b>${v.nome||'—'}</b> — ${a.descricao}${a.hora?` <small>(${a.hora})</small>`:""}</div>${podeApagar?`<button class="del" data-dela="${a.id}" title="Remover">×</button>`:""}</div>`;
+  }).join("") : `<div class="ab-empty">Nenhum atendimento específico nesse dia.</div>`;
+  if(podeEditarAtend){
+    const vetSel = isMaster()
+      ? `<select id="atVet">${vets().map(v=>`<option value="${v.id}">${v.nome}</option>`).join("")}</select>`
+      : `<input type="hidden" id="atVet" value="${myVet.id}">`;
+    atend += `<div class="atend-add">${vetSel}<input id="atDesc" type="text" placeholder="Descrição (ex.: cirurgia, retorno)"><input id="atHora" type="text" class="hora" placeholder="Hora (opc.)"><button id="atAdd" class="atend-btn">+ Adicionar</button></div>`;
+  }
+  atend += `</div>`;
+
+  $("#panelBody").innerHTML=`<h2>${brFull(key)}</h2>${edit}${atend}${team}`;
   $("#panelBody").dataset.kind="day";
   $("#panelBody").querySelectorAll(".vchip").forEach(b=>{ if(!b.disabled) b.onclick=()=>setTurno(b.dataset.v,key,b.dataset.t); });
   $("#panelBody").querySelectorAll(".tsw").forEach(b=>b.onclick=()=>setTurno(myVet.id,key,b.dataset.t));
   const bd=$("#btnDiaInteiro"); if(bd) bd.onclick=()=>toggleDiaInteiro(myVet.id,key);
+  const aAdd=$("#atAdd"); if(aAdd) aAdd.onclick=()=>addAtend(key);
+  $("#panelBody").querySelectorAll("[data-dela]").forEach(b=>b.onclick=()=>removeAtend(b.dataset.dela));
+}
+async function addAtend(dia){
+  const vetId=$("#atVet").value, desc=$("#atDesc").value.trim(), hora=$("#atHora").value.trim()||null;
+  if(!vetId){ toast("Selecione o veterinário."); return; }
+  if(!desc){ toast("Descreva o atendimento."); return; }
+  const {error}=await sb.from("atendimentos").insert({vet_id:vetId,dia,descricao:desc,hora,criado_por:meId()});
+  if(error){ toast("Erro ao salvar atendimento."); return; }
+  await loadAtend(); render(); if(dayModalKey===dia) drawDayModal(); toast("Atendimento adicionado.");
+}
+async function removeAtend(id){
+  const {error}=await sb.from("atendimentos").delete().eq("id",id);
+  if(error){ toast("Erro ao remover."); return; }
+  await loadAtend(); render(); if(dayModalKey) drawDayModal();
 }
 
 /* ---------- CABEÇALHO / AÇÕES ---------- */
@@ -874,25 +940,28 @@ function exportarEscala(){
   if(!window.XLSX){ toast("Biblioteca de Excel ainda carregando, tente de novo."); return; }
   const y=view.getFullYear(), m=view.getMonth(), days=new Date(y,m+1,0).getDate();
   const dow=["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
-  const nomesTurno=t=>vets().filter(v=>hasTurno(ymd(new Date(y,m,dCur)),v.id,t)&&!ausenteEm(v.id,ymd(new Date(y,m,dCur)))).map(v=>v.nome).join(", ");
-  let dCur=1;
-  const esc=[["Dia","Semana","Manhã","Tarde","Noite","Ausentes"]];
-  for(dCur=1;dCur<=days;dCur++){
+  // Aba 1: Escala
+  const esc=[["Dia","Semana","Manhã","Tarde","Noite","Atendimentos específicos","Ausentes"]];
+  for(let dCur=1;dCur<=days;dCur++){
     const key=ymd(new Date(y,m,dCur));
     const q=t=>vets().filter(v=>hasTurno(key,v.id,t)&&!ausenteEm(v.id,key)).map(v=>v.nome).join(", ");
+    const atd=atendDoDia(key).map(a=>`${nomeDe(a.vet_id)}: ${a.descricao}${a.hora?" ("+a.hora+")":""}`).join(" | ");
     const aus=vets().filter(v=>ausenteEm(v.id,key)).map(v=>v.nome).join(", ");
-    esc.push([`${String(dCur).padStart(2,"0")}/${String(m+1).padStart(2,"0")}`, dow[new Date(y,m,dCur).getDay()], q("manha"), q("tarde"), q("noite"), aus]);
+    esc.push([`${String(dCur).padStart(2,"0")}/${String(m+1).padStart(2,"0")}`, dow[new Date(y,m,dCur).getDay()], q("manha"), q("tarde"), q("noite"), atd, aus]);
   }
-  const res=[["Veterinário","Dias trabalhados","Total de turnos","Manhãs","Tardes","Noites"]];
+  // Aba 2: Resumo
+  const res=[["Veterinário","Dias trabalhados","Total de turnos","Dias c/ 1 turno","Dias c/ 2 turnos","Dias c/ 3 turnos","Manhãs","Tardes","Noites","Atendimentos"]];
   vets().forEach(v=>{
-    const dias=new Set(); let tot=0,cm=0,ct=0,cn=0;
-    for(const k in marks){ const[yy,mm]=k.split("-"); if(+yy!==y||+mm!==m+1)continue; const s=marks[k][v.id]; if(!s||!s.size)continue; dias.add(k);
-      s.forEach(t=>{tot++; if(t==="manha")cm++; else if(t==="tarde")ct++; else if(t==="noite")cn++;}); }
-    res.push([v.nome, dias.size, tot, cm, ct, cn]);
+    const dias=new Set(); let tot=0,cm=0,ct=0,cn=0,d1=0,d2=0,d3=0;
+    for(const k in marks){ const[yy,mm]=k.split("-"); if(+yy!==y||+mm!==m+1)continue; const s=marks[k][v.id]; if(!s||!s.size)continue;
+      dias.add(k); tot+=s.size;
+      if(s.size===1)d1++; else if(s.size===2)d2++; else if(s.size>=3)d3++;
+      s.forEach(t=>{ if(t==="manha")cm++; else if(t==="tarde")ct++; else if(t==="noite")cn++; }); }
+    res.push([v.nome, dias.size, tot, d1, d2, d3, cm, ct, cn, countAtend(v)]);
   });
   const wb=XLSX.utils.book_new();
-  const ws1=XLSX.utils.aoa_to_sheet(esc); ws1["!cols"]=[{wch:8},{wch:6},{wch:30},{wch:30},{wch:30},{wch:24}];
-  const ws2=XLSX.utils.aoa_to_sheet(res); ws2["!cols"]=[{wch:24},{wch:16},{wch:16},{wch:10},{wch:10},{wch:10}];
+  const ws1=XLSX.utils.aoa_to_sheet(esc); ws1["!cols"]=[{wch:8},{wch:6},{wch:28},{wch:28},{wch:28},{wch:34},{wch:22}];
+  const ws2=XLSX.utils.aoa_to_sheet(res); ws2["!cols"]=[{wch:24},{wch:16},{wch:15},{wch:14},{wch:14},{wch:14},{wch:9},{wch:9},{wch:9},{wch:13}];
   XLSX.utils.book_append_sheet(wb, ws1, "Escala");
   XLSX.utils.book_append_sheet(wb, ws2, "Resumo");
   XLSX.writeFile(wb, `escala-chamego-${MESES[m].toLowerCase()}-${y}.xlsx`);
